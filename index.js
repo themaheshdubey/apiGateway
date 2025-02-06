@@ -1,45 +1,47 @@
 const express = require('express');
-const morgan = require('morgan');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const rateLimit = require('express-rate-limit');
-const axios = require('axios');
+require('dotenv').config();
+
 const app = express();
+const PORT = process.env.PORT;
 
-const PORT = 3005;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
+// Rate Limiting (100 requests per 10 minutes)
 const limiter = rateLimit({
-	windowMs: 2 * 60 * 1000,
-	max: 5, 
-})
-
-app.use(morgan('combined'));
+    windowMs: 10 * 60 * 1000,
+    max: 100,
+    message: 'Too many requests, please try again later.',
+});
 app.use(limiter);
 
-app.use('/bookingservice', async (req, res, next) => {
-    console.log(req.headers['x-access-token']);
-    try {
-        const response = await axios.get('http://localhost:3010/api/v1/isAuthenticated', {
-            headers: {
-                'x-access-token': req.headers['x-access-token']
-            }
-        });
-        console.log(response.data);
-        if(response.data.success) {
-            next();
-        } else {
-            return res.status(401).json({
-                message: 'Unauthorised'
-            })
-        }
-    } catch (error) {
-        return res.status(401).json({
-            message: 'Unauthorised'
-        })
-    }
-})
+// Service Map (Dynamically Forward Requests)
+const services = {
+    flightservice: process.env.FLIGHT_SERVICE_PATH,
+    userservice: process.env.USER_SERVICE_PATH,
+    bookingservice: process.env.BOOKING_SERVICE_PATH,
+};
 
-app.use('/bookingservice', createProxyMiddleware({ target: 'http://localhost:3002/', changeOrigin: true}));
+// Middleware to dynamically route requests
+app.use('/api/v1/:service/*', (req, res, next) => {
+    const serviceName = req.params.service;
+    const target = services[serviceName];
+
+    if (target) {
+        return createProxyMiddleware({
+            target,
+            changeOrigin: true,
+            pathRewrite: (path, req) => {
+                return path.replace(`/api/v1/${serviceName}`, '/api/v1');
+            },
+        })(req, res, next);
+    } else {
+        return res.status(404).json({ message: 'Service not found' });
+    }
+});
 
 app.listen(PORT, () => {
-    console.log(`Server started at port ${PORT}`);
+    console.log(`API Gateway is running on port ${PORT}`);
 });
